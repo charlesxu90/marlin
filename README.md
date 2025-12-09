@@ -31,10 +31,25 @@ foreach (1.5.2)
 
 Conda environment setup:
 
-```
+```shell
 conda create --name marlin -c conda-forge r-base=4.1.3
 conda activate marlin
 conda install -c conda-forge r-keras=2.13 r-tensorflow=2.13 tensorflow-gpu=2.13 python=3.10
+```
+
+```R
+install.packages('data.table')        
+library(data.table)
+
+# If you don't have devtools, install it first:
+# install.packages("devtools")
+devtools::install_github("rstudio/tensorflow")
+library(tensorflow)
+install_tensorflow() Install python version of tensorflow
+
+# install.packages("keras") # if not already installed
+library(keras)
+install_keras()
 ```
 
 The official Oxford Nanopore Technologies tool to extract DNA modifications [modkit](https://github.com/nanoporetech/modkit)

@@ -1,0 +1,39 @@
+MARLIN CODEBASE DIRECTORY STRUCTURE
+====================================
+
+/home/xux/Desktop/NanoALC/
+├── MARLIN/                          # Main MARLIN implementation
+│   ├── README.md                    # Installation and usage guide
+│   ├── LICENSE                      # MIT License
+│   ├── MARLIN_training.R            # Training script (neural network training)
+│   ├── MARLIN_prediction.R          # Batch prediction script
+│   ├── betas.RData                  # Training data matrix (357,340 x 2,356)
+│   ├── y.RData                      # Class labels (42 classes)
+│   │
+│   ├── MARLIN_realtime/             # Real-time prediction system
+│   │   ├── README.txt               # Real-time setup instructions
+│   │   ├── 0_real_time_prediction_main.sh   # Main monitoring loop (every 5s)
+│   │   ├── 1_process_live.sh        # Individual BAM processing
+│   │   ├── 2_process_pileup.R       # Merge pileup files
+│   │   ├── 3_marlin_predictions_live.R  # Generate predictions
+│   │   ├── 4_plot_live2.R           # Create visualization PDFs
+│   │   └── files/                   # Reference files
+│   │       ├── marlin_v1.model.hdf5         # Trained Keras model (1.1 GB)
+│   │       ├── marlin_v1.features.RData     # 357,340 reference CpGs (1.7 MB)
+│   │       ├── marlin_v1.class_annotations.xlsx  # Class metadata (22 KB)
+│   │       ├── marlin_v1.probes_hg19.bed.gz  # hg19 coordinates (6.1 MB)
+│   │       ├── marlin_v1.probes_hg38.bed.gz  # hg38 coordinates (5.4 MB)
+│   │       └── marlin_v1.probes_t2t.bed.gz   # T2T coordinates (5.4 MB)
+│   │
+│   └── shinyMARLIN/                 # Web interface
+│       └── README.md                # shinyMARLIN documentation
+│
+└── pyMARLIN/                        # Python wrapper (currently empty)
+    └── [Empty directory - future Python implementation]
+
+TOTAL CODEBASE FILES: 16
+- R Scripts: 6
+- Bash Scripts: 2
+- Data Files: 8
+- Documentation: 4
+- Total Size: ~1.2 GB (dominated by model file)

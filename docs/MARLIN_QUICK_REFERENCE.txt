@@ -1,0 +1,220 @@
+MARLIN SYSTEM - QUICK REFERENCE GUIDE
+======================================
+
+WHAT IS MARLIN?
+===============
+MARLIN (Methylation- and AI-guided Rapid Leukemia Subtype Inference)
+- Deep neural network for acute leukemia classification
+- Uses DNA methylation profiles from nanopore sequencing
+- Classifies into 42 distinct leukemia subtypes
+- Provides real-time predictions during live sequencing
+- Reference: Dana-Farber Cancer Institute, Hovestadt Lab
+
+
+CORE CAPABILITIES
+=================
+1. Real-time streaming predictions during sequencing (5-second updates)
+2. Batch processing of stored methylation data
+3. Web interface (shinyMARLIN) for non-technical users
+4. Support for multiple human genome references (hg19, hg38, T2T)
+5. Progressive accuracy improvement as more data accumulates
+
+
+TECHNOLOGY STACK
+================
+Language & Framework:
+  - R 4.1.3 (primary programming language)
+  - TensorFlow 2.13 (deep learning backend)
+  - Keras 2.13 (neural network API)
+  - Python 3.10 (required for TensorFlow/Keras)
+
+Key Libraries:
+  - data.table (fast data I/O)
+  - doParallel, foreach (parallel processing)
+  - openxlsx (Excel file handling)
+
+External Tools:
+  - modkit (Oxford Nanopore methylation extraction)
+  - samtools (BAM file handling)
+  - MinKNOW (ONT sequencing control)
+
+
+NEURAL NETWORK ARCHITECTURE
+============================
+Layer          Nodes      Activation    Purpose
+─────────────────────────────────────────────────
+Input          357,340    N/A           One per CpG site
+Dropout        357,340    99%           Heavy regularization
+Hidden 1       256        Sigmoid       Feature extraction
+Hidden 2       128        Sigmoid       Feature refinement
+Output         42         Softmax       Class probabilities
+
+Key Hyperparameters:
+  - Epochs: 3,000
+  - Batch Size: 32
+  - Learning Rate: 10^-5 (Adam optimizer)
+  - Input Binarization: Threshold 0.5
+  - Training Samples: 2,100 (50 per class × 42 classes)
+  - Loss Function: Categorical cross-entropy
+
+
+DATA FORMATS & SIZES
+====================
+Input Files:
+  - BED format methylation calls (tab-delimited)
+  - BAM files with methylation modification tags
+
+Reference Files:
+  - marlin_v1.model.hdf5: 1.1 GB (trained model)
+  - marlin_v1.features.RData: 1.7 MB (357,340 CpG names)
+  - marlin_v1.probes_*.bed.gz: 5-6 MB per genome (hg19/hg38/T2T)
+  - marlin_v1.class_annotations.xlsx: 22 KB (class metadata)
+
+Output Files:
+  - predictions.RData: Matrix (samples × 42 classes)
+  - .pred.txt: Tab-delimited text with scores + metadata
+  - .pred.pdf: Visualization (8 plots)
+
+
+FILE STRUCTURE
+==============
+/home/xux/Desktop/NanoALC/MARLIN/
+├── MARLIN_training.R           Training script (133 lines)
+├── MARLIN_prediction.R         Batch prediction (78 lines)
+├── betas.RData                 Training data (357,340 × 2,356)
+├── y.RData                     Class labels (42 classes)
+├── MARLIN_realtime/
+│   ├── 0_real_time_prediction_main.sh    Main loop (14 lines)
+│   ├── 1_process_live.sh                 BAM processing (20 lines)
+│   ├── 2_process_pileup.R                Pileup merging (45 lines)
+│   ├── 3_marlin_predictions_live.R       Predictions (45 lines)
+│   ├── 4_plot_live2.R                    Visualization (89 lines)
+│   └── files/                            Reference data
+├── shinyMARLIN/                Web interface
+└── README.md                   Documentation
+
+
+USAGE EXAMPLES
+==============
+
+Training (if retraining the model):
+  CUDA_VISIBLE_DEVICES=1 Rscript MARLIN_training.R
+
+Batch Prediction (for pre-computed methylation files):
+  CUDA_VISIBLE_DEVICES=1 Rscript MARLIN_prediction.R
+  
+Real-time Prediction (during live sequencing):
+  cd /path/to/bam/files
+  bash /path/to/MARLIN_realtime/0_real_time_prediction_main.sh
+
+Web Interface (shinyMARLIN):
+  https://hovestadtlab.shinyapps.io/shinyMARLIN/
+
+
+REAL-TIME WORKFLOW STEPS
+========================
+1. MinKNOW runs basecalling with methylation detection
+2. Main script monitors directory every 5 seconds
+3. Detects new BAM files
+4. SAMtools indexes BAM file
+5. modkit extracts methylation pileup
+6. R script merges all pileups (cumulative)
+7. Features matched to 357,340 reference CpGs
+8. Keras model generates predictions
+9. Visualizations created and updated
+10. Process repeats as more BAM files arrive
+11. Predictions improve as coverage increases
+
+
+KEY TECHNICAL FEATURES
+======================
+Sparse Input Handling:
+  - Missing methylation coded as 0 (not covered)
+  - Allows incomplete methylation profiles
+  - Coverage improves cumulatively over time
+
+Regularization:
+  - 99% dropout on input (extreme regularization)
+  - Prevents overfitting on high-dimensional sparse input
+  - Sigmoid activations in hidden layers
+
+Parallel Processing:
+  - 24 CPU cores by default (adjustable)
+  - Processes multiple samples in parallel
+  - Uses doParallel and foreach R packages
+
+GPU Support:
+  - CUDA-enabled TensorFlow for accelerated inference
+  - Control via CUDA_VISIBLE_DEVICES environment variable
+  - Significant speedup for batch predictions
+
+Value Encoding:
+  - Beta values >= 0.5: encoded as +1
+  - Beta values < 0.5: encoded as -1
+  - Missing values: encoded as 0
+
+
+OUTPUT CLASSIFICATION
+====================
+42 Methylation Classes organized as:
+
+Lineages (e.g., Myeloid, B-cell, T-cell):
+  - Higher-level grouping of classes
+  - Can aggregate scores by lineage
+
+Methylation Families (MCF):
+  - Intermediate classification level
+  - Groups similar methylation patterns
+
+Individual Classes:
+  - Specific leukemia subtype classifications
+  - Each gets individual probability score
+
+All predictions output:
+  - Probability score for each of 42 classes
+  - Scores sum to 1.0 (softmax normalization)
+  - Color-coded visualizations by level
+
+
+INSTALLATION
+=============
+conda create --name marlin -c conda-forge r-base=4.1.3
+conda activate marlin
+conda install -c conda-forge r-keras=2.13 \
+  r-tensorflow=2.13 tensorflow-gpu=2.13 python=3.10
+
+Additional system requirements:
+  - modkit (ONT methylation extraction)
+  - samtools (BAM manipulation)
+  - MinKNOW (ONT sequencing control)
+  - Human genome reference (hg19.fa or hg38.fa)
+  - Trained MARLIN model (marlin_v1.model.hdf5)
+
+
+IMPORTANT NOTES
+===============
+- Model training requires reference methylation array data
+- Predictions are probabilistic (not binary classifications)
+- Coverage threshold (0.8) recommended for high confidence
+- Can use hg19, hg38, or T2T genome references
+- Real-time predictions update every 5 seconds
+- System is designed for clinical rapid diagnosis
+- Web interface (shinyMARLIN) makes it accessible to clinicians
+
+
+PUBLICATION
+===========
+Reference: Steinicke et al., Nature (2025)
+Paper: https://www.nature.com/articles/s41588-025-02321-z
+
+For more information:
+- Hovestadt Lab: Dana-Farber Cancer Institute
+- GitHub: https://github.com/hovestadt/MARLIN
+- License: MIT
+
+
+CONTACT & SUPPORT
+=================
+- Salvatore Benfatto (salvatore_benfatto@dfci.harvard.edu)
+- Hovestadt Lab, Dana-Farber Cancer Institute
+- Last Update: November 2024

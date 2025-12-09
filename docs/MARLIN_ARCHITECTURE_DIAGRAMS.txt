@@ -1,0 +1,341 @@
+MARLIN SYSTEM ARCHITECTURE & DIAGRAMS
+======================================
+
+1. OVERALL SYSTEM ARCHITECTURE
+================================
+
+    ┌─────────────────────────────────────────────────────────────────┐
+    │                      MARLIN CLASSIFICATION SYSTEM               │
+    └─────────────────────────────────────────────────────────────────┘
+                                    │
+                    ┌───────────────┼───────────────┐
+                    │               │               │
+            ┌───────▼──────┐  ┌────▼────┐  ┌──────▼──────┐
+            │  Real-Time   │  │ Batch   │  │ Web         │
+            │  Streaming   │  │ Predict │  │ Interface   │
+            └───────┬──────┘  └────┬────┘  └──────┬──────┘
+                    │               │             │
+                    │ BAM files     │ BED files   │ BedMethyl
+                    │ (streaming)   │ (batch)     │ files
+                    │               │             │
+                    └───────┬───────┴─────────┬───┘
+                            │                 │
+                    ┌───────▼─────────────────▼────────┐
+                    │   Methylation Processing Layer   │
+                    │ - Pileup generation              │
+                    │ - Feature extraction             │
+                    │ - Data normalization             │
+                    └───────────┬──────────────────────┘
+                                │
+                    ┌───────────▼──────────────┐
+                    │  MARLIN Neural Network   │
+                    │ 357,340 input features   │
+                    │ 42 leukemia classes      │
+                    │ 1.1 GB HDF5 model        │
+                    └───────────┬──────────────┘
+                                │
+                    ┌───────────▼──────────────┐
+                    │  Output & Visualization │
+                    │ - Prediction scores     │
+                    │ - PDF reports           │
+                    │ - Text files            │
+                    └──────────────────────────┘
+
+
+2. NEURAL NETWORK ARCHITECTURE
+==============================
+
+    357,340 CpG Input Nodes
+    (binarized: -1 or +1)
+              │
+              │
+              ▼
+    ┌─────────────────────────┐
+    │ Input Layer             │
+    │ 357,340 nodes           │
+    │ Dropout: 99%            │ ◄── Extreme regularization
+    └──────────┬──────────────┘
+               │
+               ▼
+    ┌─────────────────────────┐
+    │ Hidden Layer 1          │
+    │ 256 nodes               │
+    │ Activation: Sigmoid     │
+    └──────────┬──────────────┘
+               │
+               ▼
+    ┌─────────────────────────┐
+    │ Hidden Layer 2          │
+    │ 128 nodes               │
+    │ Activation: Sigmoid     │
+    └──────────┬──────────────┘
+               │
+               ▼
+    ┌─────────────────────────┐
+    │ Output Layer            │
+    │ 42 nodes (classes)      │
+    │ Activation: Softmax     │
+    └──────────┬──────────────┘
+               │
+               ▼
+    42 Probability Scores
+    (sum to 1.0)
+    - 42 leukemia classes
+    - Each class: 0.0-1.0
+
+
+3. REAL-TIME PREDICTION PIPELINE
+=================================
+
+    MinKNOW (Nanopore Sequencing)
+            │
+            ▼
+    BAM Files with Mod Tags
+    (basecalling + methylation)
+            │
+    ┌───────▼────────────────────────────────────────┐
+    │  0_real_time_prediction_main.sh                │
+    │  - Monitors directory every 5 seconds         │
+    │  - Detects new .bam files                     │
+    └───────┬────────────────────────────────────────┘
+            │
+    ┌───────▼────────────────────────────────────────┐
+    │  1_process_live.sh                             │
+    │  - samtools index: Index BAM file             │
+    │  - modkit pileup: Extract methylation calls   │
+    │    (ref hg19/hg38/T2T)                        │
+    │  Output: .pileup files                        │
+    └───────┬────────────────────────────────────────┘
+            │
+    ┌───────▼────────────────────────────────────────┐
+    │  2_process_pileup.R                            │
+    │  - Read all .pileup files (cumulative)        │
+    │  - Merge methylation calls per CpG            │
+    │  - Compute beta values: cov_mod / cov_valid   │
+    │  - Create BED file (cumulative)               │
+    │  Output: calls.bam.pileup.bed                 │
+    └───────┬────────────────────────────────────────┘
+            │
+    ┌───────▼────────────────────────────────────────┐
+    │  3_marlin_predictions_live.R                   │
+    │  - Load reference features (357,340 CpGs)    │
+    │  - Match pileup to reference                  │
+    │  - Binarize: beta >= 0.5 → 1, else -1       │
+    │  - Handle missing: NA → 0                     │
+    │  - Run Keras model prediction                 │
+    │  Output: .pred.RData, .pred.txt              │
+    └───────┬────────────────────────────────────────┘
+            │
+    ┌───────▼────────────────────────────────────────┐
+    │  4_plot_live2.R                                │
+    │  - Load all previous predictions              │
+    │  - Sort by timestamp                          │
+    │  - Create 8-panel PDF:                        │
+    │    * Coverage over time                       │
+    │    * Lineage scores (time series + final)    │
+    │    * Family scores (time series + final)     │
+    │    * Class scores (time series + final)      │
+    │  Output: .pred.pdf                           │
+    └───────┬────────────────────────────────────────┘
+            │
+            ▼
+    Final PDF Report with Predictions
+    (updated every BAM file)
+
+
+4. BATCH PREDICTION PIPELINE
+============================
+
+    Input BED Files
+    (multiple samples)
+            │
+    ┌───────▼────────────────────────────────────────┐
+    │  MARLIN_prediction.R                           │
+    │  Load: model, features                         │
+    └───────┬────────────────────────────────────────┘
+            │
+    ┌───────▼────────────────────────────────────────┐
+    │  Parallel Processing (24 cores)                │
+    │  For each BED file:                            │
+    │  ├─ Read methylation calls                    │
+    │  ├─ Match to reference CpGs                   │
+    │  ├─ Binarize values                           │
+    │  └─ Handle missing data (NA → 0)             │
+    └───────┬────────────────────────────────────────┘
+            │
+    ┌───────▼────────────────────────────────────────┐
+    │  Stack into Matrix                             │
+    │  (N samples × 357,340 features)               │
+    └───────┬────────────────────────────────────────┘
+            │
+    ┌───────▼────────────────────────────────────────┐
+    │  Keras Model Batch Prediction                 │
+    │  Input: 357,340 features per sample           │
+    │  Output: 42 class probabilities               │
+    └───────┬────────────────────────────────────────┘
+            │
+    ┌───────▼────────────────────────────────────────┐
+    │  Output: predictions.RData                     │
+    │  Matrix: N samples × 42 classes               │
+    │  Values: Softmax probabilities (0-1)          │
+    └───────────────────────────────────────────────┘
+
+
+5. DATA TRANSFORMATION PIPELINE
+==============================
+
+    Raw Nanopore Sequencing Data (FASTQ)
+              │
+              ▼
+    Basecalling + Mod Detection (MinKNOW)
+              │
+              ▼
+    BAM Files with Modification Tags
+    (contains methylation information)
+              │
+              ▼
+    ┌─────────────────────────────────────┐
+    │  modkit pileup                      │
+    │  Extract methylation per position   │
+    │  Filter to reference CpGs           │
+    │  Create: .pileup files              │
+    └──────────┬──────────────────────────┘
+               │
+               ▼
+    ┌─────────────────────────────────────┐
+    │  R: Process & Merge                 │
+    │  - Combine all pileups              │
+    │  - Aggregate coverage               │
+    │  - Calculate beta values            │
+    │  Create: BED format                 │
+    └──────────┬──────────────────────────┘
+               │
+               ▼
+    ┌─────────────────────────────────────┐
+    │  Feature Alignment                  │
+    │  - Match to reference CpGs          │
+    │  - 357,340 reference features       │
+    │  - Preserve feature order           │
+    └──────────┬──────────────────────────┘
+               │
+               ▼
+    ┌─────────────────────────────────────┐
+    │  Value Encoding                     │
+    │  - Binarize: beta >= 0.5 → 1        │
+    │  -           beta < 0.5 → -1        │
+    │  - Missing: NA → 0                  │
+    │  Create: 357,340 feature vector     │
+    └──────────┬──────────────────────────┘
+               │
+               ▼
+    ┌─────────────────────────────────────┐
+    │  MARLIN Prediction                  │
+    │  Input: 357,340 features            │
+    │  Output: 42 class probabilities     │
+    └──────────┬──────────────────────────┘
+               │
+               ▼
+    ┌─────────────────────────────────────┐
+    │  Output Generation                  │
+    │  - Prediction scores                │
+    │  - Confidence metrics               │
+    │  - Visualization plots              │
+    │  - Clinical report                  │
+    └─────────────────────────────────────┘
+
+
+6. DATA FLOW: Input to Output
+=============================
+
+    INPUT FORMATS:
+    ├─ BED files (methylation calls)
+    │  ├─ Column 1: Chromosome
+    │  ├─ Column 2: Position
+    │  ├─ Column 3: End position
+    │  ├─ Column 4: Beta value (0-1 or NA)
+    │  └─ Column 5: CpG ID (cg notation)
+    │
+    └─ BAM files (Nanopore sequencing)
+       └─ With methylation modification tags
+
+    PROCESSING:
+    ├─ Extract methylation information
+    ├─ Match to 357,340 reference CpGs
+    ├─ Binarize values (1/-1)
+    ├─ Handle missing data (0)
+    └─ Create feature vectors
+
+    REFERENCE DATA:
+    ├─ marlin_v1.features.RData
+    │  └─ Ordered CpG names (357,340)
+    ├─ marlin_v1.probes_*.bed.gz
+    │  └─ Genomic coordinates
+    └─ marlin_v1.class_annotations.xlsx
+       └─ Class metadata & colors
+
+    NEURAL NETWORK:
+    ├─ Input: 357,340 features
+    ├─ Hidden: 256 → 128 sigmoid nodes
+    ├─ Output: 42 classes (softmax)
+    └─ Size: 1.1 GB (HDF5)
+
+    OUTPUT FORMATS:
+    ├─ Predictions.RData (matrix)
+    │  └─ N samples × 42 classes
+    ├─ .pred.txt (text)
+    │  └─ Tab-delimited scores + metadata
+    └─ .pred.pdf (visualization)
+       └─ 8 plots (coverage, lineage, family, class)
+
+
+7. MODEL CLASSIFICATION HIERARCHY
+=================================
+
+    42 Methylation Classes
+            │
+            ├─ Organized by Lineage
+            │  ├─ Myeloid
+            │  ├─ B-cell
+            │  ├─ T-cell
+            │  └─ Rare lineages
+            │
+            ├─ Organized by Methylation Family
+            │  ├─ MCF1 (family group 1)
+            │  ├─ MCF2 (family group 2)
+            │  └─ ... (multiple families)
+            │
+            └─ Individual Classes
+               ├─ ML1 (Myeloid Leukemia 1)
+               ├─ ALL1 (Acute Lymphoblastic Leukemia 1)
+               └─ ... (42 total classes)
+
+    Each prediction outputs probability for all 42 classes:
+    - Color-coded by lineage
+    - Color-coded by methylation family
+    - Color-coded by individual class
+    - Can be aggregated into higher-level predictions
+
+
+8. REFERENCE SEQUENCE SETUP
+===========================
+
+    For Real-Time Predictions, User Selects:
+
+    Human Genome Assembly
+            │
+            ├─ hg19 (older reference)
+            │  └─ marlin_v1.probes_hg19.bed.gz
+            │
+            ├─ hg38 (current standard)
+            │  └─ marlin_v1.probes_hg38.bed.gz
+            │
+            └─ T2T (complete genome)
+               └─ marlin_v1.probes_t2t.bed.gz
+
+    System then:
+    1. Uses selected probe coordinates
+    2. Runs modkit with selected reference
+    3. Extracts methylation at probe positions
+    4. Matches to 357,340 reference features
+    5. Runs prediction
+

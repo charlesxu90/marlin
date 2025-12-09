@@ -24,13 +24,39 @@ options(stringsAsFactors = FALSE)
 options(scipen = 999)
 
 library(data.table)
+
+# Force R to use the marlin mamba environment (which has TensorFlow with GPU)
+library(reticulate)
+use_python("/home/xux/miniforge3/envs/marlin/bin/python", required = TRUE)
+
 library(keras)
+library(tensorflow)
+
+## GPU Configuration
+# Check available GPUs
+gpus <- tf$config$list_physical_devices("GPU")
+message(paste("Available GPUs:", length(gpus)))
+
+if (length(gpus) > 0) {
+  # Enable memory growth to avoid allocating all GPU memory at once
+  for (gpu in gpus) {
+    tf$config$experimental$set_memory_growth(gpu, TRUE)
+  }
+  message("GPU memory growth enabled")
+  
+  # Optionally, set visible devices (use GPU 0 by default, or set CUDA_VISIBLE_DEVICES)
+  # tf$config$set_visible_devices(gpus[[1]], "GPU")
+  
+  message(paste("Using GPU:", gpus[[1]]$name))
+} else {
+  message("No GPU found, using CPU")
+}
 
 
 ## load reference
 load("betas.RData")  # beta values matrix
 load("y.RData")      # class labels
-samples_anno <- fread("training_samples.txt")  # sample annotations
+#samples_anno <- fread("training_samples.txt")  # sample annotations
 
 dim(betas)  # 2356 samples x 357340 features
 table(y)    # 42 classes
